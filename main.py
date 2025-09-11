@@ -518,4 +518,4 @@ def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="185.72.144.22", port=22)
+    uvicorn.run(app, host="185.72.144.22", port=8000)
