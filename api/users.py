@@ -1,3 +1,4 @@
+# api/users.py
 from fastapi import APIRouter, HTTPException
 import sqlite3
 import uuid
@@ -8,7 +9,6 @@ from models.user_models import UserCreate, UserResponse, SettingsUpdate, UserRol
 
 router = APIRouter()
 
-
 @router.post("/users", response_model=UserResponse)
 def create_user(user_data: UserCreate):
     """Создание нового пользователя"""
@@ -16,26 +16,19 @@ def create_user(user_data: UserCreate):
         with get_db_connection() as conn:
             user_id = str(uuid.uuid4().int)[:6]
 
-            # Проверяем, что ID не занят
-            max_attempts = 10
-            attempts = 0
-            while attempts < max_attempts:
-                cursor = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
-                if not cursor.fetchone():
+            # генерим уникальный 6-значный id (псевдо)
+            for _ in range(10):
+                cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+                if not cur.fetchone():
                     break
                 user_id = str(uuid.uuid4().int)[:6]
-                attempts += 1
-
-            if attempts == max_attempts:
+            else:
                 raise HTTPException(status_code=500, detail="Не удалось создать уникальный ID пользователя")
 
-            # Вставляем пользователя
             conn.execute(
-                "INSERT INTO users (user_id, device_info, role) VALUES (?, ?, ?)",
-                (user_id, user_data.device_info, 'user')
+                "INSERT INTO users (user_id, device_info, role) VALUES (?, ?, 'user')",
+                (user_id, user_data.device_info)
             )
-
-            # Создаем настройки по умолчанию
             conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
             conn.commit()
 
@@ -49,230 +42,178 @@ def create_user(user_data: UserCreate):
         logger.error(f"Ошибка создания пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка создания пользователя")
 
-
 @router.get("/users", response_model=list[UserInfo])
 def get_all_users():
-    """Получение списка всех зарегистрированных пользователей"""
+    """Список всех пользователей (для экрана разработчика)"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.execute(
-                "SELECT user_id, role, device_info, created_at, updated_at FROM users ORDER BY created_at DESC"
+            cur = conn.execute(
+                "SELECT user_id, role, device_info, created_at, updated_at "
+                "FROM users ORDER BY created_at DESC"
             )
             users = []
-            for row in cursor.fetchall():
+            for row in cur.fetchall():
                 users.append({
-                    "user_id": row['user_id'],
-                    "role": row['role'],
-                    "device_info": row['device_info'],
-                    "created_at": row['created_at'],
-                    "updated_at": row['updated_at']
+                    "user_id": row["user_id"],
+                    "role":     row["role"] or "user",
+                    "device_info": row["device_info"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"] or datetime.now().isoformat()
                 })
             return users
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения списка пользователей")
 
-
 @router.get("/users/{user_id}/role")
 def get_user_role(user_id: str):
-    """Получение роли пользователя"""
+    """Получение роли пользователя (если нет — создаём как 'user')"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.execute(
-                "SELECT role FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            user = cursor.fetchone()
-
-            if not user:
-                # Если пользователь не существует, создаем его с ролью по умолчанию
+            cur = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                # создаём пользователя "на лету"
                 try:
-                    conn.execute(
-                        "INSERT INTO users (user_id, role) VALUES (?, ?)",
-                        (user_id, 'user')
-                    )
-                    conn.execute(
-                        "INSERT INTO user_settings (user_id) VALUES (?)",
-                        (user_id,)
-                    )
+                    conn.execute("INSERT INTO users (user_id, role) VALUES (?, 'user')", (user_id,))
+                    conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
                     conn.commit()
                     logger.info(f"Создан новый пользователь: {user_id}")
                     return {"role": "user"}
                 except sqlite3.IntegrityError:
-                    # Возможно, пользователь был создан в параллельном запросе
-                    cursor = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
-                    user = cursor.fetchone()
-                    if user:
-                        return {"role": user['role']}
-                    return {"role": "user"}
-
-            return {"role": user['role']}
-
+                    cur2 = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+                    row2 = cur2.fetchone()
+                    return {"role": (row2["role"] if row2 else "user")}
+            return {"role": row["role"]}
     except Exception as e:
         logger.error(f"Ошибка получения роли пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения роли пользователя")
 
-
 @router.put("/users/role")
 def update_user_role(role_data: UserRoleUpdate):
-    """Обновление роли пользователя (только для разработчиков)"""
+    """Изменение роли пользователя"""
     try:
-        with get_db_connection() as conn:
-            # Проверяем, что роль валидна
-            if role_data.role not in ['user', 'admin', 'developer']:
-                raise HTTPException(status_code=400, detail="Неверная роль пользователя")
+        if role_data.role not in ["user", "admin", "developer"]:
+            raise HTTPException(status_code=400, detail="Неверная роль пользователя")
 
-            # Проверяем существование пользователя
-            cursor = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (role_data.user_id,))
-            if not cursor.fetchone():
+        with get_db_connection() as conn:
+            cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (role_data.user_id,))
+            if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-            # Не позволяем снять права разработчика с самого себя
-            if role_data.user_id == '000000' and role_data.role != 'developer':
+            if role_data.user_id == "000000" and role_data.role != "developer":
                 raise HTTPException(status_code=400, detail="Нельзя изменить роль системного разработчика")
 
-            # Обновляем роль пользователя
             conn.execute(
                 "UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
                 (role_data.role, role_data.user_id)
             )
-
             conn.commit()
             logger.info(f"Роль пользователя {role_data.user_id} изменена на {role_data.role}")
             return {"message": "Роль пользователя успешно обновлена"}
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Ошибка обновления роли пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка обновления роли пользователя")
 
-
 @router.delete("/users/{user_id}/admin")
 def remove_admin_role(user_id: str):
-    """Снятие прав администратора с пользователя (только для разработчиков)"""
+    """Снятие прав администратора"""
     try:
         with get_db_connection() as conn:
-            # Проверяем существование пользователя
-            cursor = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
-            user = cursor.fetchone()
-
-            if not user:
+            cur = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+            row = cur.fetchone()
+            if not row:
                 raise HTTPException(status_code=404, detail="Пользователь не найден")
-
-            if user['role'] != 'admin':
+            if row["role"] != "admin":
                 raise HTTPException(status_code=400, detail="Пользователь не является администратором")
-
-            # Не позволяем снять права с системного разработчика
-            if user_id == '000000':
+            if user_id == "000000":
                 raise HTTPException(status_code=400, detail="Нельзя изменить роль системного разработчика")
 
-            # Понижаем до обычного пользователя
             conn.execute(
                 "UPDATE users SET role = 'user', updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
                 (user_id,)
             )
-
             conn.commit()
-            logger.info(f"Пользователь {user_id} понижен до обычного пользователя")
+            logger.info(f"Пользователь {user_id} понижен до user")
             return {"message": "Права администратора успешно сняты"}
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Ошибка снятия прав администратора: {e}")
         raise HTTPException(status_code=500, detail="Ошибка снятия прав администратора")
 
-
 @router.get("/users/{user_id}/settings")
 def get_user_settings(user_id: str):
-    """Получение настроек пользователя"""
+    """Загрузка настроек; если нет — создаём дефолтные"""
     try:
         with get_db_connection() as conn:
-            # Сначала проверяем существование пользователя
-            cursor = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
-            if not cursor.fetchone():
-                # Если пользователь не существует, создаем его с настройками по умолчанию
-                try:
-                    conn.execute("INSERT INTO users (user_id, role) VALUES (?, ?)", (user_id, 'user'))
-                    conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
-                    conn.commit()
-                    logger.info(f"Создан новый пользователь: {user_id}")
-                except sqlite3.IntegrityError:
-                    pass  # Пользователь мог быть создан в параллельном запросе
-
-            # Получаем настройки
-            cursor = conn.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
-            settings = cursor.fetchone()
-
-            if not settings:
-                # Если настроек нет, создаем их
+            cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+            if not cur.fetchone():
+                conn.execute("INSERT INTO users (user_id, role) VALUES (?, 'user')", (user_id,))
                 conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
                 conn.commit()
-                cursor = conn.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
-                settings = cursor.fetchone()
+
+            cur = conn.execute("""
+                SELECT notifications_enabled, vibration_enabled, sound_enabled, language, font_size
+                FROM user_settings WHERE user_id = ?
+            """, (user_id,))
+            row = cur.fetchone()
+            if not row:
+                conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
+                conn.commit()
+                return {
+                    "notifications_enabled": True,
+                    "vibration_enabled": True,
+                    "sound_enabled": True,
+                    "language": "Русский",
+                    "font_size": "Средний",
+                }
 
             return {
-                "notifications_enabled": bool(settings['notifications_enabled']),
-                "vibration_enabled": bool(settings['vibration_enabled']),
-                "sound_enabled": bool(settings['sound_enabled']),
-                "language": settings['language'],
-                "font_size": settings['font_size']
+                "notifications_enabled": bool(row["notifications_enabled"]),
+                "vibration_enabled": bool(row["vibration_enabled"]),
+                "sound_enabled": bool(row["sound_enabled"]),
+                "language": row["language"],
+                "font_size": row["font_size"],
             }
-
     except Exception as e:
         logger.error(f"Ошибка получения настроек: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка получения настроек: {str(e)}")
-
+        raise HTTPException(status_code=500, detail="Ошибка получения настроек пользователя")
 
 @router.put("/users/{user_id}/settings")
-def update_user_settings(user_id: str, settings: SettingsUpdate):
-    """Обновление настроек пользователя"""
+def update_user_settings(user_id: str, data: SettingsUpdate):
+    """Частичное обновление настроек"""
     try:
         with get_db_connection() as conn:
-            # Проверяем существование пользователя
-            cursor = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
-            if not cursor.fetchone():
-                # Если пользователь не существует, создаем его
-                conn.execute("INSERT INTO users (user_id, role) VALUES (?, ?)", (user_id, 'user'))
-                conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
-                logger.info(f"Создан новый пользователь: {user_id}")
+            # ensure row exists
+            conn.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
 
-            # Строим динамический запрос для обновления
-            update_fields = []
-            update_values = []
+            fields = []
+            values = []
+            if data.notifications_enabled is not None:
+                fields.append("notifications_enabled = ?")
+                values.append(1 if data.notifications_enabled else 0)
+            if data.vibration_enabled is not None:
+                fields.append("vibration_enabled = ?")
+                values.append(1 if data.vibration_enabled else 0)
+            if data.sound_enabled is not None:
+                fields.append("sound_enabled = ?")
+                values.append(1 if data.sound_enabled else 0)
+            if data.language is not None:
+                fields.append("language = ?")
+                values.append(data.language)
+            if data.font_size is not None:
+                fields.append("font_size = ?")
+                values.append(data.font_size)
 
-            if settings.notifications_enabled is not None:
-                update_fields.append("notifications_enabled = ?")
-                update_values.append(int(settings.notifications_enabled))
-
-            if settings.vibration_enabled is not None:
-                update_fields.append("vibration_enabled = ?")
-                update_values.append(int(settings.vibration_enabled))
-
-            if settings.sound_enabled is not None:
-                update_fields.append("sound_enabled = ?")
-                update_values.append(int(settings.sound_enabled))
-
-            if settings.language is not None:
-                update_fields.append("language = ?")
-                update_values.append(settings.language)
-
-            if settings.font_size is not None:
-                update_fields.append("font_size = ?")
-                update_values.append(settings.font_size)
-
-            if update_fields:
-                update_fields.append("updated_at = CURRENT_TIMESTAMP")
-                update_values.append(user_id)
-
-                query = f"UPDATE user_settings SET {', '.join(update_fields)} WHERE user_id = ?"
-                conn.execute(query, update_values)
+            if fields:
+                set_clause = ", ".join(fields + ["updated_at = CURRENT_TIMESTAMP"])
+                conn.execute(f"UPDATE user_settings SET {set_clause} WHERE user_id = ?", (*values, user_id))
                 conn.commit()
 
-            logger.info(f"Настройки пользователя {user_id} обновлены")
-            return {"message": "Настройки успешно обновлены"}
-
+            return {"message": "Настройки обновлены"}
     except Exception as e:
         logger.error(f"Ошибка обновления настроек: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка обновления настроек: {str(e)}")
+        raise HTTPException(status_code=500, detail="Ошибка обновления настроек пользователя")

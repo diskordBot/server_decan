@@ -1,21 +1,47 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
 from config import SERVER_CONFIG
 from utils.logger import setup_logging, logger
 from database.connection import init_database
-from utils.backup import backup_database  # Импорт из правильного места
-from api import users, schedule, groups, health
+from utils.backup import backup_database
+from api import users, schedule, groups, health, news, settings  # ✅ добавили news
+import sys
+import io
 
-# Настройка логирования
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
+# Логирование
 setup_logging()
 
+# Lifespan вместо @app.on_event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        init_database()
+        logger.info("Сервер успешно запущен")
+    except Exception as e:
+        logger.error(f"Ошибка запуска сервера: {e}")
+        raise
+    yield
+    try:
+        backup_database()
+        logger.info("Сервер завершает работу")
+    except Exception as e:
+        logger.error(f"Ошибка при завершении работы: {e}")
+
+# Создание приложения
 app = FastAPI(
     title="Decanat Project API",
     description="API для мобильного приложения кафедры ПМИИ",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS middleware
+app.include_router(settings.router, prefix="/api", tags=["Settings"])
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,26 +55,9 @@ app.include_router(users.router, prefix="/api", tags=["Users"])
 app.include_router(schedule.router, prefix="/api", tags=["Schedule"])
 app.include_router(groups.router, prefix="/api", tags=["Groups"])
 app.include_router(health.router, prefix="/api", tags=["Health"])
+app.include_router(news.router, prefix="/api", tags=["News"])  # ✅ добавили роутер
 
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация при запуске сервера"""
-    try:
-        init_database()
-        logger.info("Сервер успешно запущен")
-    except Exception as e:
-        logger.error(f"Ошибка запуска сервера: {e}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Действия при завершении работы сервера"""
-    try:
-        backup_database()
-        logger.info("Сервер завершает работу")
-    except Exception as e:
-        logger.error(f"Ошибка при завершении работы: {e}")
-
+# Root endpoint
 @app.get("/")
 async def root():
     return {

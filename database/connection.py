@@ -1,3 +1,4 @@
+# database/connection.py
 import sqlite3
 import os
 from contextlib import contextmanager
@@ -7,12 +8,10 @@ from utils.logger import logger
 
 @contextmanager
 def get_db_connection():
-    """Контекстный менеджер для безопасной работы с базой данных"""
     conn = None
     try:
         conn = sqlite3.connect(SERVER_CONFIG["database_url"], timeout=30)
         conn.row_factory = sqlite3.Row
-        # Включаем поддержку внешних ключей и улучшаем надежность
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
@@ -27,7 +26,6 @@ def get_db_connection():
 
 
 def check_database_integrity():
-    """Проверка целостности базы данных"""
     try:
         with get_db_connection() as conn:
             cursor = conn.execute("PRAGMA integrity_check")
@@ -38,12 +36,42 @@ def check_database_integrity():
         return False
 
 
-def init_database():
-    """Инициализация базы данных"""
-    from .migrations import run_migrations
-    from database.models import create_tables
+def _ensure_system_developer(conn: sqlite3.Connection) -> None:
+    """Создаём (или чиним) системного разработчика 000000"""
+    conn.execute(
+        "INSERT OR IGNORE INTO users (user_id, role, device_info) VALUES ('000000', 'developer', 'system')"
+    )
+    conn.execute(
+        "UPDATE users SET role = 'developer' WHERE user_id = '000000' AND role <> 'developer'"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO user_settings (user_id) VALUES ('000000')"
+    )
+    logger.info("Пользователь-разработчик 000000 создан/обновлён")
 
-    # Проверяем целостность базы данных
+
+def _ensure_news_table(conn: sqlite3.Connection) -> None:
+    """Создание таблицы новостей, если её нет"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            image_url TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    logger.info("Таблица news проверена/создана")
+
+
+def init_database():
+    # относительный импорт внутри пакета database
+    from .migrations import run_migrations
+    from .models import create_tables
+
+    # если файл есть, но битый — удалим
     if os.path.exists(SERVER_CONFIG["database_url"]) and not check_database_integrity():
         logger.warning("База данных повреждена, создаем новую")
         try:
@@ -53,8 +81,10 @@ def init_database():
 
     try:
         with get_db_connection() as conn:
-            create_tables(conn)
-            run_migrations(conn)
+            create_tables(conn)        # создаём схемы для основных таблиц
+            run_migrations(conn)       # применяем миграции (старые БД обновляем)
+            _ensure_system_developer(conn)
+            _ensure_news_table(conn)   # ✅ теперь таблица news тоже всегда есть
             conn.commit()
             logger.info("База данных инициализирована успешно")
     except Exception as e:
