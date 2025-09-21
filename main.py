@@ -52,16 +52,17 @@ app.add_middleware(
 )
 
 # Подключение роутеров
+
 app.include_router(users.router, prefix="/api", tags=["Users"])
 app.include_router(schedule.router, prefix="/api", tags=["Schedule"])
 app.include_router(groups.router, prefix="/api", tags=["Groups"])
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(news.router, prefix="/api", tags=["News"])
 app.include_router(settings.router, prefix="/api", tags=["Settings"])
+
 app.include_router(students.router, prefix="/api", tags=["Students"])
 app.include_router(teachers.router, prefix="/api", tags=["Teachers"])
 app.include_router(teacher_schedule_router, prefix="/api")
-app.include_router(news.router, prefix="/api")
 
 # Root endpoint
 @app.get("/")
