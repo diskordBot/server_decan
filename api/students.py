@@ -178,6 +178,7 @@ def get_all_students():
 
             students = []
             for row in cur.fetchall():
+                logger.info(f"DEBUG: Student data: {row}")  # Логирование полученных данных
                 students.append({
                     "user_id": row["user_id"],
                     "full_name": row["full_name"],
@@ -192,20 +193,3 @@ def get_all_students():
     except Exception as e:
         logger.error(f"Ошибка получения списка студентов: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения списка студентов")
-
-@router.get("/students/validate-group/{group_name}")
-def validate_group(group_name: str):
-    """Проверка валидности группы"""
-    try:
-        is_valid = is_valid_group(group_name)
-        group_info = get_group_info(group_name) if is_valid else None
-
-        return {
-            "group_name": group_name,
-            "is_valid": is_valid,
-            "group_info": group_info,
-            "available_groups": DEFAULT_GROUPS
-        }
-    except Exception as e:
-        logger.error(f"Ошибка проверки группы: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка проверки группы")

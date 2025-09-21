@@ -152,6 +152,7 @@ def get_all_teachers():
 
             teachers = []
             for row in cur.fetchall():
+                logger.info(f"DEBUG: Teacher data: {row}")  # Логирование полученных данных
                 teachers.append({
                     "user_id": row["user_id"],
                     "full_name": row["full_name"],
