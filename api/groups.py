@@ -3,27 +3,40 @@ from fastapi import APIRouter, HTTPException
 from database.connection import get_db_connection
 from utils.logger import logger
 from models.schedule_models import GroupCreate
+from data.groups import DEFAULT_GROUPS  # Импортируем из нового файла
 
 router = APIRouter()
+
+def _ensure_default_groups(conn):
+    """Добавляет дефолтные группы в базу, если их нет"""
+    for group in DEFAULT_GROUPS:
+        conn.execute(
+            "INSERT OR IGNORE INTO schedule_groups (group_name) VALUES (?)",
+            (group,)
+        )
+    conn.commit()
 
 @router.get("/groups")
 def get_groups():
     """Список групп"""
     try:
         with get_db_connection() as conn:
+            # Сначала убедимся, что дефолтные группы есть в базе
+            _ensure_default_groups(conn)
+
+            # Теперь получаем группы из базы
             cur = conn.execute("SELECT DISTINCT group_name FROM schedule_groups ORDER BY group_name")
             groups = [row["group_name"] for row in cur.fetchall()]
-            if not groups:
-                # дефолтные группы как фоллбек
-                return [
-                    'КИ-25', 'СП-25а', 'СП-25б', 'КСЦ-25', 'ПИ-25а', 'ПИ-25б', 'ПИ-25в',
-                    'ИИ-25а', 'ИИ-25б', 'ИНФ-25', 'САУ-25', 'ПМКИ-25', 'КИ-24', 'СП-24',
-                    'КСЦ-24', 'ПИ-24а', 'ПИ-24б', 'ИИ-24', 'ИНФ-24', 'САУ-24'
-                ]
+
             return groups
     except Exception as e:
         logger.error(f"Ошибка получения групп: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения групп")
+
+@router.get("/groups/default")
+def get_default_groups():
+    """Получить дефолтный список групп (без обращения к БД)"""
+    return DEFAULT_GROUPS
 
 @router.post("/groups")
 def create_group(group_data: GroupCreate):
@@ -39,3 +52,19 @@ def create_group(group_data: GroupCreate):
     except Exception as e:
         logger.error(f"Ошибка добавления группы: {e}")
         raise HTTPException(status_code=500, detail="Ошибка добавления группы")
+
+@router.get("/groups/debug")
+def debug_groups():
+    """Отладочная информация о группах"""
+    try:
+        with get_db_connection() as conn:
+            cur = conn.execute("SELECT * FROM schedule_groups ORDER BY group_name")
+            groups = [dict(row) for row in cur.fetchall()]
+            return {
+                "groups": groups,
+                "count": len(groups),
+                "default_groups": DEFAULT_GROUPS
+            }
+    except Exception as e:
+        logger.error(f"Ошибка отладки групп: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка отладки групп")

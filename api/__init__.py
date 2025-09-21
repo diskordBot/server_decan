@@ -1,3 +1,4 @@
+# api/__init__.py
 from .users import router as users_router
 from .schedule import router as schedule_router
 from .groups import router as groups_router

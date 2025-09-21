@@ -1,4 +1,3 @@
-# api/users.py
 from fastapi import APIRouter, HTTPException
 import sqlite3
 import uuid
@@ -9,6 +8,7 @@ from models.user_models import UserCreate, UserResponse, SettingsUpdate, UserRol
 
 router = APIRouter()
 
+
 @router.post("/users", response_model=UserResponse)
 def create_user(user_data: UserCreate):
     """Создание нового пользователя"""
@@ -16,7 +16,6 @@ def create_user(user_data: UserCreate):
         with get_db_connection() as conn:
             user_id = str(uuid.uuid4().int)[:6]
 
-            # генерим уникальный 6-значный id (псевдо)
             for _ in range(10):
                 cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
                 if not cur.fetchone():
@@ -42,28 +41,73 @@ def create_user(user_data: UserCreate):
         logger.error(f"Ошибка создания пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка создания пользователя")
 
+
 @router.get("/users", response_model=list[UserInfo])
 def get_all_users():
-    """Список всех пользователей (для экрана разработчика)"""
+    """Список всех пользователей с полной информацией"""
     try:
         with get_db_connection() as conn:
-            cur = conn.execute(
-                "SELECT user_id, role, device_info, created_at, updated_at "
-                "FROM users ORDER BY created_at DESC"
-            )
+            # Получаем всех пользователей с LEFT JOIN к students и teachers
+            cur = conn.execute("""
+                SELECT 
+                    u.user_id, 
+                    u.role, 
+                    u.device_info, 
+                    u.created_at, 
+                    u.updated_at,
+                    s.full_name as student_full_name,
+                    s.login as student_login,
+                    s.password as student_password,
+                    s.group_name as student_group,
+                    t.full_name as teacher_full_name,
+                    t.login as teacher_login,
+                    t.password as teacher_password,
+                    t.department as teacher_department,
+                    t.position as teacher_position
+                FROM users u
+                LEFT JOIN students s ON u.user_id = s.user_id
+                LEFT JOIN teachers t ON u.user_id = t.user_id
+                ORDER BY u.created_at DESC
+            """)
+
             users = []
             for row in cur.fetchall():
-                users.append({
+                user_info = {
                     "user_id": row["user_id"],
-                    "role":     row["role"] or "user",
+                    "role": row["role"] or "user",
                     "device_info": row["device_info"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"] or datetime.now().isoformat()
-                })
+                }
+
+                # Добавляем информацию о студенте, если есть
+                if row["student_full_name"]:
+                    user_info.update({
+                        "full_name": row["student_full_name"],
+                        "login": row["student_login"],
+                        "password": row["student_password"],
+                        "group_name": row["student_group"]
+                    })
+
+                # Добавляем информацию о преподавателе, если есть
+                elif row["teacher_full_name"]:
+                    user_info.update({
+                        "full_name": row["teacher_full_name"],
+                        "login": row["teacher_login"],
+                        "password": row["teacher_password"],
+                        "department": row["teacher_department"],
+                        "position": row["teacher_position"]
+                    })
+
+                users.append(user_info)
+
+            logger.info(f"Получено {len(users)} пользователей с полной информацией")
             return users
+
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения списка пользователей")
+
 
 @router.get("/users/{user_id}/role")
 def get_user_role(user_id: str):
@@ -72,8 +116,8 @@ def get_user_role(user_id: str):
         with get_db_connection() as conn:
             cur = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
             row = cur.fetchone()
+
             if not row:
-                # создаём пользователя "на лету"
                 try:
                     conn.execute("INSERT INTO users (user_id, role) VALUES (?, 'user')", (user_id,))
                     conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
@@ -84,16 +128,19 @@ def get_user_role(user_id: str):
                     cur2 = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
                     row2 = cur2.fetchone()
                     return {"role": (row2["role"] if row2 else "user")}
+
             return {"role": row["role"]}
+
     except Exception as e:
         logger.error(f"Ошибка получения роли пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения роли пользователя")
+
 
 @router.put("/users/role")
 def update_user_role(role_data: UserRoleUpdate):
     """Изменение роли пользователя"""
     try:
-        if role_data.role not in ["user", "admin", "developer"]:
+        if role_data.role not in ["user", "admin", "developer", "teacher", "student"]:
             raise HTTPException(status_code=400, detail="Неверная роль пользователя")
 
         with get_db_connection() as conn:
@@ -116,6 +163,7 @@ def update_user_role(role_data: UserRoleUpdate):
     except Exception as e:
         logger.error(f"Ошибка обновления роли пользователя: {e}")
         raise HTTPException(status_code=500, detail="Ошибка обновления роли пользователя")
+
 
 @router.delete("/users/{user_id}/admin")
 def remove_admin_role(user_id: str):
@@ -143,6 +191,7 @@ def remove_admin_role(user_id: str):
     except Exception as e:
         logger.error(f"Ошибка снятия прав администратора: {e}")
         raise HTTPException(status_code=500, detail="Ошибка снятия прав администратора")
+
 
 @router.get("/users/{user_id}/settings")
 def get_user_settings(user_id: str):
@@ -182,12 +231,12 @@ def get_user_settings(user_id: str):
         logger.error(f"Ошибка получения настроек: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения настроек пользователя")
 
+
 @router.put("/users/{user_id}/settings")
 def update_user_settings(user_id: str, data: SettingsUpdate):
     """Частичное обновление настроек"""
     try:
         with get_db_connection() as conn:
-            # ensure row exists
             conn.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
 
             fields = []

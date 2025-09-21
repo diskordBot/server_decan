@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, HTTPException, Form, Depends, Query
 from database.connection import get_db_connection
 from utils.logger import logger
@@ -47,6 +49,50 @@ async def get_news():
     except Exception as e:
         logger.error(f"Ошибка получения новостей: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения новостей")
+
+
+# Добавьте этот код в ваш файл с API для новостей
+@router.get("/news/latest")
+def get_latest_news():
+    """Получение самой последней новости"""
+    try:
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT id, title, text, image_url, created_at
+                FROM news 
+                ORDER BY created_at DESC 
+                LIMIT 1
+                """
+            )
+
+            news = cur.fetchone()
+            if news:
+                # Обрабатываем image_url (может быть строкой или списком)
+                image_url = news["image_url"]
+                if image_url and isinstance(image_url, str):
+                    try:
+                        # Пробуем распарсить JSON, если это список
+                        parsed = json.loads(image_url)
+                        if isinstance(parsed, list):
+                            image_url = parsed
+                    except:
+                        # Если не JSON, оставляем как строку
+                        pass
+
+                return {
+                    "id": news["id"],
+                    "title": news["title"],
+                    "text": news["text"],
+                    "image_url": image_url,
+                    "created_at": news["created_at"]
+                }
+            else:
+                return {}
+
+    except Exception as e:
+        logger.error(f"Ошибка получения последней новости: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка получения новости")
 
 
 @router.delete("/news/{news_id}")

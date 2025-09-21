@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 class UserCreate(BaseModel):
@@ -17,7 +17,7 @@ class SettingsUpdate(BaseModel):
 
 class UserRoleUpdate(BaseModel):
     user_id: str
-    role: str  # 'user', 'admin', 'developer'
+    role: str = Field(..., pattern="^(user|admin|developer|teacher|student)$")  # Добавляем teacher и student
 
 class UserInfo(BaseModel):
     user_id: str

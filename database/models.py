@@ -17,6 +17,56 @@ def create_tables(conn: sqlite3.Connection):
             )
         """)
 
+        # STUDENTS — таблица студентов
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT UNIQUE NOT NULL,
+                full_name TEXT NOT NULL,
+                login TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
+                FOREIGN KEY (group_name) REFERENCES schedule_groups (group_name) ON DELETE CASCADE
+            )
+        """)
+
+        # TEACHERS — новая таблица преподавателей (добавляем UNIQUE для full_name)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS teachers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT UNIQUE NOT NULL,
+                full_name TEXT UNIQUE NOT NULL,  -- ДОБАВЛЕНО UNIQUE
+                login TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                department TEXT,
+                position TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        """)
+
+        # TEACHER SCHEDULE - расписание преподавателей (исправлен внешний ключ)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS teacher_schedule (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teacher_name TEXT NOT NULL,
+                week_type TEXT NOT NULL,              -- 'upper' | 'lower'
+                day_name TEXT NOT NULL,               -- 'Понедельник' ... 'Суббота'
+                lesson_number INTEGER NOT NULL,
+                subject TEXT NOT NULL,
+                group_name TEXT NOT NULL,             -- группа студентов
+                classroom TEXT NOT NULL,
+                lesson_type TEXT NOT NULL,           -- тип занятия
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (teacher_name) REFERENCES teachers (full_name) ON DELETE CASCADE
+            )
+        """)
+
         # SETTINGS — глобальные параметры
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -97,6 +147,47 @@ def create_tables(conn: sqlite3.Connection):
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_settings_user_id 
             ON user_settings (user_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_students_user_id 
+            ON students (user_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_students_login 
+            ON students (login)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_students_group 
+            ON students (group_name)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teachers_user_id 
+            ON teachers (user_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teachers_login 
+            ON teachers (login)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teachers_department 
+            ON teachers (department)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teachers_full_name 
+            ON teachers (full_name)  -- ДОБАВЛЕН новый индекс
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teacher_schedule_name_week 
+            ON teacher_schedule (teacher_name, week_type)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teacher_schedule_name_week_day 
+            ON teacher_schedule (teacher_name, week_type, day_name)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_teacher_schedule_teacher_name 
+            ON teacher_schedule (teacher_name)
         """)
 
         logger.info("Схема БД создана/обновлена")

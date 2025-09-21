@@ -4,7 +4,7 @@ import os
 from contextlib import contextmanager
 from config import SERVER_CONFIG
 from utils.logger import logger
-
+from data.groups import DEFAULT_GROUPS  # Импортируем из нового файла
 
 @contextmanager
 def get_db_connection():
@@ -24,7 +24,6 @@ def get_db_connection():
         if conn:
             conn.close()
 
-
 def check_database_integrity():
     try:
         with get_db_connection() as conn:
@@ -34,7 +33,6 @@ def check_database_integrity():
     except Exception as e:
         logger.error(f"Ошибка проверки целостности БД: {e}")
         return False
-
 
 def _ensure_system_developer(conn: sqlite3.Connection) -> None:
     """Создаём (или чиним) системного разработчика 000000"""
@@ -48,7 +46,6 @@ def _ensure_system_developer(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO user_settings (user_id) VALUES ('000000')"
     )
     logger.info("Пользователь-разработчик 000000 создан/обновлён")
-
 
 def _ensure_news_table(conn: sqlite3.Connection) -> None:
     """Создание таблицы новостей, если её нет"""
@@ -65,6 +62,14 @@ def _ensure_news_table(conn: sqlite3.Connection) -> None:
     )
     logger.info("Таблица news проверена/создана")
 
+def _ensure_default_groups(conn: sqlite3.Connection) -> None:
+    """Создаем дефолтные группы при инициализации базы"""
+    for group in DEFAULT_GROUPS:
+        conn.execute(
+            "INSERT OR IGNORE INTO schedule_groups (group_name) VALUES (?)",
+            (group,)
+        )
+    logger.info("Дефолтные группы созданы/проверены")
 
 def init_database():
     # относительный импорт внутри пакета database
@@ -81,10 +86,11 @@ def init_database():
 
     try:
         with get_db_connection() as conn:
-            create_tables(conn)        # создаём схемы для основных таблиц
-            run_migrations(conn)       # применяем миграции (старые БД обновляем)
+            create_tables(conn)
+            run_migrations(conn)
             _ensure_system_developer(conn)
-            _ensure_news_table(conn)   # ✅ теперь таблица news тоже всегда есть
+            _ensure_news_table(conn)
+            _ensure_default_groups(conn)
             conn.commit()
             logger.info("База данных инициализирована успешно")
     except Exception as e:

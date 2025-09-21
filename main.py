@@ -1,14 +1,16 @@
+#main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-
+from api.teacher_schedule import router as teacher_schedule_router
 from config import SERVER_CONFIG
 from utils.logger import setup_logging, logger
 from database.connection import init_database
-from utils.backup import backup_database
-from api import users, schedule, groups, health, news, settings  # ✅ добавили news
+from api import users, schedule, groups, health, news, settings, students, teachers  # ✅ добавили news
 import sys
 import io
+
+
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
@@ -27,7 +29,6 @@ async def lifespan(app: FastAPI):
         raise
     yield
     try:
-        backup_database()
         logger.info("Сервер завершает работу")
     except Exception as e:
         logger.error(f"Ошибка при завершении работы: {e}")
@@ -55,7 +56,12 @@ app.include_router(users.router, prefix="/api", tags=["Users"])
 app.include_router(schedule.router, prefix="/api", tags=["Schedule"])
 app.include_router(groups.router, prefix="/api", tags=["Groups"])
 app.include_router(health.router, prefix="/api", tags=["Health"])
-app.include_router(news.router, prefix="/api", tags=["News"])  # ✅ добавили роутер
+app.include_router(news.router, prefix="/api", tags=["News"])
+app.include_router(settings.router, prefix="/api", tags=["Settings"])
+app.include_router(students.router, prefix="/api", tags=["Students"])
+app.include_router(teachers.router, prefix="/api", tags=["Teachers"])
+app.include_router(teacher_schedule_router, prefix="/api")
+app.include_router(news.router, prefix="/api")
 
 # Root endpoint
 @app.get("/")
