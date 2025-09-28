@@ -1,19 +1,21 @@
+# news.py
 import json
-
-from fastapi import APIRouter, HTTPException, Form, Depends, Query
-from database.connection import get_db_connection
-from utils.logger import logger
 from datetime import datetime
 
+from fastapi import APIRouter, HTTPException, Form, Query
+from database.connection import get_db_connection
+from utils.logger import logger
+from utils.fcm import send_news_to_topic
+
 router = APIRouter()
+
 
 @router.post("/news")
 async def add_news(
     title: str = Form(...),
     text: str = Form(...),
-    image_url: str = Form(None)
+    image_url: str = Form(None),
 ):
-    """Добавить новость (бот вызывает)"""
     try:
         with get_db_connection() as conn:
             conn.execute(
@@ -21,6 +23,20 @@ async def add_news(
                 (title, text, image_url, datetime.utcnow())
             )
             conn.commit()
+
+        # превью для пуша — первая строка, обрезаем до ~120
+        preview = (text or "").split("\n", 1)[0]
+        if len(preview) > 120:
+            preview = preview[:120] + "…"
+
+        # Пушим всем подписанным на /topics/news
+        send_news_to_topic(
+            title=title,
+            body=preview,
+            data={"type": "news", "title": title},
+            topic="news",
+        )
+
         logger.info(f"Добавлена новость: {title}")
         return {"message": "Новость добавлена"}
     except Exception as e:
@@ -50,8 +66,6 @@ async def get_news():
         logger.error(f"Ошибка получения новостей: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения новостей")
 
-
-# Добавьте этот код в ваш файл с API для новостей
 @router.get("/news/latest")
 def get_latest_news():
     """Получение самой последней новости"""
@@ -60,40 +74,34 @@ def get_latest_news():
             cur = conn.execute(
                 """
                 SELECT id, title, text, image_url, created_at
-                FROM news 
-                ORDER BY created_at DESC 
+                FROM news
+                ORDER BY created_at DESC
                 LIMIT 1
                 """
             )
-
             news = cur.fetchone()
-            if news:
-                # Обрабатываем image_url (может быть строкой или списком)
-                image_url = news["image_url"]
-                if image_url and isinstance(image_url, str):
-                    try:
-                        # Пробуем распарсить JSON, если это список
-                        parsed = json.loads(image_url)
-                        if isinstance(parsed, list):
-                            image_url = parsed
-                    except:
-                        # Если не JSON, оставляем как строку
-                        pass
-
-                return {
-                    "id": news["id"],
-                    "title": news["title"],
-                    "text": news["text"],
-                    "image_url": image_url,
-                    "created_at": news["created_at"]
-                }
-            else:
+            if not news:
                 return {}
 
+            image_url = news["image_url"]
+            if image_url and isinstance(image_url, str):
+                try:
+                    parsed = json.loads(image_url)
+                    if isinstance(parsed, list):
+                        image_url = parsed
+                except Exception:
+                    pass
+
+            return {
+                "id": news["id"],
+                "title": news["title"],
+                "text": news["text"],
+                "image_url": image_url,
+                "created_at": news["created_at"]
+            }
     except Exception as e:
         logger.error(f"Ошибка получения последней новости: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения новости")
-
 
 @router.delete("/news/{news_id}")
 async def delete_news(news_id: int, user_id: str = Query(...)):
@@ -124,7 +132,6 @@ async def delete_news(news_id: int, user_id: str = Query(...)):
 
         logger.info(f"Пользователь {user_id} ({role}) удалил новость ID={news_id}")
         return {"message": "Новость удалена успешно"}
-
     except HTTPException:
         raise
     except Exception as e:
