@@ -11,5 +11,7 @@ SERVER_CONFIG = {
     "backup_enabled": os.getenv("BACKUP_ENABLED", "true").lower() == "true",
 
     # ❗️НЕ даём дефолта. Только из переменной окружения!
-    "fcm_service_account": os.getenv("FCM_SERVICE_ACCOUNT", "").strip(),
+    #"fcm_service_account": os.getenv("FCM_SERVICE_ACCOUNT", "").strip(),
+    "fcm_service_account": os.getenv("FCM_SERVICE_ACCOUNT", "/root/server_decan/keys/service-account.json"),
+
 }
