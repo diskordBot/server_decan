@@ -10,7 +10,6 @@ SERVER_CONFIG = {
     "database_url": os.getenv("DATABASE_URL", "decanat_app.db"),
     "backup_enabled": os.getenv("BACKUP_ENABLED", "true").lower() == "true",
 
-    # ключ FCM больше не нужен
-    "fcm_service_account": os.getenv("FCM_SERVICE_ACCOUNT", "firebase_key.json"),
+    # ❗️НЕ даём дефолта. Только из переменной окружения!
+    "fcm_service_account": os.getenv("FCM_SERVICE_ACCOUNT", "").strip(),
 }
-

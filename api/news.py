@@ -25,17 +25,21 @@ async def add_news(
             conn.commit()
 
         # превью для пуша — первая строка, обрезаем до ~120
+        # превью для пуша — первая строка, обрезаем до ~120
         preview = (text or "").split("\n", 1)[0]
         if len(preview) > 120:
             preview = preview[:120] + "…"
 
-        # Пушим всем подписанным на /topics/news
-        send_news_to_topic(
-            title=title,
-            body=preview,
-            data={"type": "news", "title": title},
-            topic="news",
-        )
+        # Пытаемся отправить пуш — ЛОГИРУЕМ, но не роняем API
+        try:
+            send_news_to_topic(
+                title=title,
+                body=preview,
+                data={"type": "news", "title": title},
+                topic="news",
+            )
+        except Exception as push_err:
+            logger.warning(f"Пуш не отправлен: {push_err}")
 
         logger.info(f"Добавлена новость: {title}")
         return {"message": "Новость добавлена"}

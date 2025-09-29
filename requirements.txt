@@ -4,7 +4,7 @@ python-multipart
 bcrypt>=4.0.0
 requests>=2.32
 python-dotenv>=1.0
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
+google-auth>=2.35.0
+google-auth-httplib2>=0.2.0
+requests>=2.32.0
 
