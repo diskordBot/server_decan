@@ -117,7 +117,6 @@ def get_full_schedule(group_name: str):
                         WHEN 'Среда' THEN 3
                         WHEN 'Четверг' THEN 4
                         WHEN 'Пятница' THEN 5
-                        WHEN 'Суббота' THEN 6
                       END,
                       lesson_number
                     """,
