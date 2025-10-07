@@ -9,6 +9,7 @@ from database.connection import init_database
 from api import users, schedule, groups, health, news, settings, students, teachers  # ✅ добавили news
 import sys
 import io
+from api import announcements  # ⬅️ добавили
 
 
 
@@ -63,6 +64,7 @@ app.include_router(settings.router, prefix="/api", tags=["Settings"])
 app.include_router(students.router, prefix="/api", tags=["Students"])
 app.include_router(teachers.router, prefix="/api", tags=["Teachers"])
 app.include_router(teacher_schedule_router, prefix="/api")
+app.include_router(announcements.router, prefix="/api", tags=["Announcements"])
 
 # Root endpoint
 @app.get("/")
