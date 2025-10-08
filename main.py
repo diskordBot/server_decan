@@ -6,7 +6,7 @@ from config import SERVER_CONFIG
 from utils.logger import setup_logging, logger
 from database.connection import init_database
 from api import users, schedule, groups, health, news, settings, students, teachers
-from api.announcements import router as announcements_router  # 👈 ПРАВИЛЬНО
+from api import announcements_router
 
 import sys
 import io
@@ -56,15 +56,23 @@ app.include_router(settings.router, prefix="/api", tags=["Settings"])
 app.include_router(students.router, prefix="/api", tags=["Students"])
 app.include_router(teachers.router, prefix="/api", tags=["Teachers"])
 app.include_router(teacher_schedule_router, prefix="/api")
-app.include_router(announcements_router, prefix="/api", tags=["Announcements"])  # ✅ теперь корректно
-
+app.include_router(announcements_router, prefix="/api", tags=["Announcements"])
 @app.get("/")
 async def root():
     return {
         "message": "Decanat Project API Server",
-        "version": "1.2.3",
+        "version": "1.0.0",
         "status": "running"
     }
+
+for r in app.routes:
+    try:
+        methods = ",".join(sorted(r.methods)) if hasattr(r, "methods") else ""
+        print("ROUTE:", r.path, methods)
+    except Exception:
+        pass
+
+
 
 if __name__ == "__main__":
     import uvicorn
