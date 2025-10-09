@@ -1,44 +1,52 @@
 # api/schedule.py
 from fastapi import APIRouter, HTTPException
+from typing import List, Dict
 from database.connection import get_db_connection
 from utils.logger import logger
-from models.schedule_models import ScheduleData
+from models.schedule_models import ScheduleData, LessonItem
 
 router = APIRouter()
 
 ALLOWED_DAYS = (
-    'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'
+    "Понедельник", "Вторник", "Среда", "Четверг", "Пятница"
 )
 
-def _normalize_lessons(day: str, lessons):
-    """Отфильтровать пустые занятия и привести ключи."""
-    out = []
-    for lesson in lessons:
-        try:
-            subject = (lesson.get("subject") or "").strip()
-            if not subject:
-                # Пустые предметы не сохраняем — чтобы не «ломали» расписание
-                continue
-            out.append({
-                "lesson_number": int(lesson["lesson_number"]),
-                "subject": subject,
-                "teacher": (lesson.get("teacher") or "").strip(),
-                "classroom": (lesson.get("classroom") or "").strip(),
-                "type": (lesson.get("type") or "").strip(),
-            })
-        except Exception:
-            # Если какой-то элемент кривой — пропускаем
+
+def _normalize_lessons(lessons: List[LessonItem]) -> List[Dict]:
+    """
+    Удаляем пустые предметы (без subject), приводим поля к нужным ключам,
+    сортируем по lesson_number и ПЕРЕ-нумеровываем 1..N без «дыр».
+    """
+    out: List[Dict] = []
+    for l in lessons:
+        if not (l.subject or "").strip():
+            # Не сохраняем «пустые» пары — это упрощает жизнь редактору
             continue
-    # Сортируем по номеру пары на всякий случай
+        out.append({
+            "lesson_number": int(l.lesson_number),
+            "subject": (l.subject or "").strip(),
+            "teacher": (l.teacher or "").strip(),
+            "classroom": (l.classroom or "").strip(),
+            "type": (l.type or "").strip(),
+        })
+
+    # Сортировка по номеру пары
     out.sort(key=lambda x: x["lesson_number"])
+    # Пере-нумерация 1..N
+    for i, it in enumerate(out, start=1):
+        it["lesson_number"] = i
     return out
+
 
 @router.post("/schedule")
 def save_schedule(schedule_data: ScheduleData):
-    """Сохранение расписания (обе недели разом)."""
+    """
+    Сохранение расписания (обе недели разом) для группы.
+    Полностью пересобираем (DELETE + INSERT), чтобы избежать «зависших» строк.
+    """
     try:
         with get_db_connection() as conn:
-            # убедимся, что группа есть
+            # гарантируем существование группы
             cur = conn.execute(
                 "SELECT 1 FROM schedule_groups WHERE group_name = ?",
                 (schedule_data.group,)
@@ -56,36 +64,33 @@ def save_schedule(schedule_data: ScheduleData):
                 (schedule_data.group,)
             )
 
-            # верхняя неделя — сохраняем только разрешённые дни
-            for day, lessons in schedule_data.upper_week.items():
-                if day not in ALLOWED_DAYS:
-                    continue
-                for lesson in _normalize_lessons(day, lessons):
-                    conn.execute(
-                        """INSERT INTO schedule
-                           (group_name, week_type, day_name, lesson_number, subject, teacher, classroom, lesson_type)
-                           VALUES (?, 'upper', ?, ?, ?, ?, ?, ?)""",
-                        (
-                            schedule_data.group, day, lesson["lesson_number"],
-                            lesson["subject"], lesson["teacher"],
-                            lesson["classroom"], lesson["type"]
-                        )
-                    )
+            # Вставка по неделям
+            for week_type, week_map in (
+                ("upper", schedule_data.upper_week),
+                ("lower", schedule_data.lower_week),
+            ):
+                for day, lessons in week_map.items():
+                    if day not in ALLOWED_DAYS:
+                        # Игнорируем «левые» дни, если такие пришли
+                        continue
 
-            # нижняя неделя — сохраняем только разрешённые дни
-            for day, lessons in schedule_data.lower_week.items():
-                if day not in ALLOWED_DAYS:
-                    continue
-                for lesson in _normalize_lessons(day, lessons):
-                    conn.execute(
-                        """INSERT INTO schedule
-                           (group_name, week_type, day_name, lesson_number, subject, teacher, classroom, lesson_type)
-                           VALUES (?, 'lower', ?, ?, ?, ?, ?, ?)""",
-                        (
-                            schedule_data.group, day, lesson["lesson_number"],
-                            lesson["subject"], lesson["teacher"],
-                            lesson["classroom"], lesson["type"]
+                    norm = _normalize_lessons(lessons)
+                    for l in norm:
+                        conn.execute(
+                            """
+                            INSERT INTO schedule
+                               (group_name, week_type, day_name, lesson_number,
+                                subject, teacher, classroom, lesson_type)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                schedule_data.group, week_type, day,
+                                l["lesson_number"], l["subject"], l["teacher"],
+                                l["classroom"], l["type"]
+                            )
                         )
+                    logger.info(
+                        f"Сохранено: group={schedule_data.group} week={week_type} day={day}: {len(norm)} пар"
                     )
 
             conn.commit()
@@ -96,9 +101,13 @@ def save_schedule(schedule_data: ScheduleData):
         logger.error(f"Ошибка сохранения расписания: {e}")
         raise HTTPException(status_code=500, detail="Ошибка сохранения расписания")
 
+
 @router.get("/schedule/{group_name}/{week_type}")
 def get_schedule(group_name: str, week_type: str):
-    """Расписание для одной недели (экран студента)."""
+    """
+    Выдача расписания одной недели для группы — для мобильного «быстрого просмотра».
+    Формат ответа: { "Понедельник": [{...}, ...], ... }
+    """
     try:
         if week_type not in ("upper", "lower"):
             raise HTTPException(status_code=400, detail="Неверный тип недели")
@@ -108,7 +117,8 @@ def get_schedule(group_name: str, week_type: str):
                 f"""
                 SELECT day_name, lesson_number, subject, teacher, classroom, lesson_type
                 FROM schedule
-                WHERE group_name = ? AND week_type = ? AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
+                WHERE group_name = ? AND week_type = ?
+                  AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
                 ORDER BY
                   CASE day_name
                     WHEN 'Понедельник' THEN 1
@@ -122,7 +132,7 @@ def get_schedule(group_name: str, week_type: str):
                 (group_name, week_type, *ALLOWED_DAYS)
             )
 
-            data = {}
+            data: Dict[str, List[Dict]] = {}
             for row in cur.fetchall():
                 day = row["day_name"]
                 data.setdefault(day, []).append({
@@ -130,20 +140,21 @@ def get_schedule(group_name: str, week_type: str):
                     "subject": row["subject"],
                     "teacher": row["teacher"],
                     "classroom": row["classroom"],
-                    "type": row["lesson_type"],   # клиент ждёт ключ 'type'
+                    "type": row["lesson_type"],   # фронт ждёт ключ 'type'
                 })
             return data
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Ошибка получения расписания: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения расписания")
 
+
 @router.get("/schedule/{group_name}")
 def get_full_schedule(group_name: str):
     """
-    Полная выдача для редактирования (обе недели).
-    Возвращает:
+    Полная выдача для редактора (обе недели).
     {
       "upper_week": { "Понедельник": [ ... ], ... },
       "lower_week": { "Понедельник": [ ... ], ... }
@@ -151,12 +162,14 @@ def get_full_schedule(group_name: str):
     """
     try:
         with get_db_connection() as conn:
-            def fetch_week(week: str):
+
+            def fetch_week(week: str) -> Dict[str, List[Dict]]:
                 cur = conn.execute(
                     f"""
                     SELECT day_name, lesson_number, subject, teacher, classroom, lesson_type
                     FROM schedule
-                    WHERE group_name = ? AND week_type = ? AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
+                    WHERE group_name = ? AND week_type = ?
+                      AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
                     ORDER BY
                       CASE day_name
                         WHEN 'Понедельник' THEN 1
@@ -169,7 +182,7 @@ def get_full_schedule(group_name: str):
                     """,
                     (group_name, week, *ALLOWED_DAYS)
                 )
-                out = {}
+                out: Dict[str, List[Dict]] = {}
                 for row in cur.fetchall():
                     day = row["day_name"]
                     out.setdefault(day, []).append({
@@ -185,6 +198,7 @@ def get_full_schedule(group_name: str):
                 "upper_week": fetch_week("upper"),
                 "lower_week": fetch_week("lower"),
             }
+
     except Exception as e:
         logger.error(f"Ошибка получения полного расписания: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения расписания")
