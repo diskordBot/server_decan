@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from database.connection import get_db_connection
 from utils.logger import logger
-from models.user_models import UserCreate, UserResponse, SettingsUpdate, UserRoleUpdate, UserInfo
+from models.user_models import UserCreate, UserResponse, SettingsUpdate, UserRoleUpdate  # UserInfo убрали из response_model
 
 router = APIRouter()
 
@@ -14,6 +14,7 @@ def create_user(user_data: UserCreate):
     """Создание нового пользователя"""
     try:
         with get_db_connection() as conn:
+            # Генерация короткого user_id (6 цифр)
             user_id = str(uuid.uuid4().int)[:6]
 
             for _ in range(10):
@@ -24,9 +25,11 @@ def create_user(user_data: UserCreate):
             else:
                 raise HTTPException(status_code=500, detail="Не удалось создать уникальный ID пользователя")
 
+            # Вставляем пользователя. device_info намеренно не трогаем (может быть в user_data для других мест),
+            # но в других эндпойнтах мы его не возвращаем.
             conn.execute(
-                "INSERT INTO users (user_id, device_info, role) VALUES (?, ?, 'user')",
-                (user_id, user_data.device_info)
+                "INSERT INTO users (user_id, device_info, role, last_seen) VALUES (?, ?, 'user', CURRENT_TIMESTAMP)",
+                (user_id, getattr(user_data, "device_info", None))
             )
             conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
             conn.commit()
@@ -42,66 +45,120 @@ def create_user(user_data: UserCreate):
         raise HTTPException(status_code=500, detail="Ошибка создания пользователя")
 
 
-@router.get("/users", response_model=list[UserInfo])
-def get_all_users():
-    """Список всех пользователей с полной информацией"""
+@router.post("/users/ping")
+def presence_ping(payload: dict):
+    """
+    Пинг присутствия (обновляет last_seen).
+    Тело: { "user_id": "123456" }
+    """
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+
     try:
         with get_db_connection() as conn:
-            # Получаем всех пользователей с LEFT JOIN к students и teachers
+            cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Пользователь не найден")
+            conn.execute(
+                "UPDATE users SET last_seen = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (user_id,)
+            )
+            conn.commit()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка обновления last_seen: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка обновления статуса")
+
+
+@router.get("/users")  # response_model убран, чтобы не конфликтовать с текущей моделью
+def get_all_users():
+    """
+    Список всех пользователей с агрегированными полями:
+    - user_id, role, created_at, updated_at
+    - last_seen, online (по last_seen <= 120 сек)
+    - full_name (COALESCE из students/teachers)
+    - group_name (для студентов), department/position (для преподов)
+    ВНИМАНИЕ: device_info и пароли НЕ возвращаются.
+    """
+    try:
+        with get_db_connection() as conn:
             cur = conn.execute("""
-                SELECT 
-                    u.user_id, 
-                    u.role, 
-                    u.device_info, 
-                    u.created_at, 
+                SELECT
+                    u.user_id,
+                    u.role,
+                    u.created_at,
                     u.updated_at,
-                    s.full_name as student_full_name,
-                    s.login as student_login,
-                    s.password as student_password,
-                    s.group_name as student_group,
-                    t.full_name as teacher_full_name,
-                    t.login as teacher_login,
-                    t.password as teacher_password,
-                    t.department as teacher_department,
-                    t.position as teacher_position
+                    u.last_seen,
+
+                    -- Данные студента / преподавателя
+                    s.full_name AS student_full_name,
+                    s.login     AS student_login,
+                    s.group_name AS student_group,
+
+                    t.full_name AS teacher_full_name,
+                    t.login     AS teacher_login,
+                    t.department AS teacher_department,
+                    t.position   AS teacher_position,
+
+                    -- Онлайн за последние 120 секунд
+                    CASE
+                        WHEN u.last_seen IS NOT NULL
+                             AND (strftime('%s','now') - strftime('%s', u.last_seen)) <= 120
+                        THEN 1 ELSE 0
+                    END AS online
                 FROM users u
                 LEFT JOIN students s ON u.user_id = s.user_id
                 LEFT JOIN teachers t ON u.user_id = t.user_id
-                ORDER BY u.created_at DESC
+                ORDER BY
+                  CASE u.role
+                    WHEN 'developer' THEN 0
+                    WHEN 'admin' THEN 1
+                    WHEN 'teacher' THEN 2
+                    WHEN 'student' THEN 3
+                    ELSE 4
+                  END,
+                  u.created_at DESC
             """)
 
             users = []
             for row in cur.fetchall():
+                # Общие поля
                 user_info = {
                     "user_id": row["user_id"],
                     "role": row["role"] or "user",
-                    "device_info": row["device_info"],
                     "created_at": row["created_at"],
-                    "updated_at": row["updated_at"] or datetime.now().isoformat()
+                    "updated_at": row["updated_at"],
+                    "last_seen": row["last_seen"],
+                    "online": bool(row["online"]),
                 }
 
-                # Добавляем информацию о студенте, если есть
+                # ФИО и доп. атрибуты
                 if row["student_full_name"]:
                     user_info.update({
                         "full_name": row["student_full_name"],
-                        "login": row["student_login"],
-                        "password": row["student_password"],
-                        "group_name": row["student_group"]
+                        "login": row["student_login"],      # можно убрать, если не нужно на фронте
+                        "group_name": row["student_group"],
                     })
-
-                # Добавляем информацию о преподавателе, если есть
                 elif row["teacher_full_name"]:
                     user_info.update({
                         "full_name": row["teacher_full_name"],
-                        "login": row["teacher_login"],
-                        "password": row["teacher_password"],
+                        "login": row["teacher_login"],      # можно убрать, если не нужно на фронте
                         "department": row["teacher_department"],
-                        "position": row["teacher_position"]
+                        "position": row["teacher_position"],
+                    })
+                else:
+                    # Пользователь без карточки студента/преподавателя
+                    user_info.update({
+                        "full_name": None,
                     })
 
+                # ВНИМАНИЕ: device_info, password не включаем в выдачу
                 users.append(user_info)
 
-            logger.info(f"Получено {len(users)} пользователей с полной информацией")
+            logger.info(f"Получено {len(users)} пользователей (с онлайн-статусом)")
             return users
 
     except Exception as e:
@@ -119,7 +176,7 @@ def get_user_role(user_id: str):
 
             if not row:
                 try:
-                    conn.execute("INSERT INTO users (user_id, role) VALUES (?, 'user')", (user_id,))
+                    conn.execute("INSERT INTO users (user_id, role, last_seen) VALUES (?, 'user', CURRENT_TIMESTAMP)", (user_id,))
                     conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
                     conn.commit()
                     logger.info(f"Создан новый пользователь: {user_id}")
@@ -200,7 +257,7 @@ def get_user_settings(user_id: str):
         with get_db_connection() as conn:
             cur = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
             if not cur.fetchone():
-                conn.execute("INSERT INTO users (user_id, role) VALUES (?, 'user')", (user_id,))
+                conn.execute("INSERT INTO users (user_id, role, last_seen) VALUES (?, 'user', CURRENT_TIMESTAMP)", (user_id,))
                 conn.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
                 conn.commit()
 

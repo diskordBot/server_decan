@@ -3,12 +3,12 @@ from fastapi import APIRouter, HTTPException
 from database.connection import get_db_connection
 from utils.logger import logger
 from models.schedule_models import GroupCreate
-from data.groups import DEFAULT_GROUPS  # Импортируем из нового файла
+from data.groups import DEFAULT_GROUPS  # список из data/groups.py
 
 router = APIRouter()
 
 def _ensure_default_groups(conn):
-    """Добавляет дефолтные группы в базу, если их нет"""
+    """Добавляет дефолтные группы в базу, если их нет."""
     for group in DEFAULT_GROUPS:
         conn.execute(
             "INSERT OR IGNORE INTO schedule_groups (group_name) VALUES (?)",
@@ -18,16 +18,14 @@ def _ensure_default_groups(conn):
 
 @router.get("/groups")
 def get_groups():
-    """Список групп"""
+    """Список групп из БД (с предварительной инициализацией дефолтов)."""
     try:
         with get_db_connection() as conn:
-            # Сначала убедимся, что дефолтные группы есть в базе
             _ensure_default_groups(conn)
-
-            # Теперь получаем группы из базы
-            cur = conn.execute("SELECT DISTINCT group_name FROM schedule_groups ORDER BY group_name")
+            cur = conn.execute(
+                "SELECT DISTINCT group_name FROM schedule_groups ORDER BY group_name"
+            )
             groups = [row["group_name"] for row in cur.fetchall()]
-
             return groups
     except Exception as e:
         logger.error(f"Ошибка получения групп: {e}")
@@ -35,12 +33,12 @@ def get_groups():
 
 @router.get("/groups/default")
 def get_default_groups():
-    """Получить дефолтный список групп (без обращения к БД)"""
+    """Дефолтный список групп без БД (из кода)."""
     return DEFAULT_GROUPS
 
 @router.post("/groups")
 def create_group(group_data: GroupCreate):
-    """Добавить группу"""
+    """Добавить группу."""
     try:
         with get_db_connection() as conn:
             conn.execute(
@@ -55,7 +53,7 @@ def create_group(group_data: GroupCreate):
 
 @router.get("/groups/debug")
 def debug_groups():
-    """Отладочная информация о группах"""
+    """Отладочная информация о группах."""
     try:
         with get_db_connection() as conn:
             cur = conn.execute("SELECT * FROM schedule_groups ORDER BY group_name")

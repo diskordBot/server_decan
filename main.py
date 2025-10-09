@@ -7,6 +7,7 @@ from utils.logger import setup_logging, logger
 from database.connection import init_database
 from api import users, schedule, groups, health, news, settings, students, teachers
 from api import announcements_router
+from api.presence import router as presence_router
 
 import sys
 import io
@@ -57,6 +58,9 @@ app.include_router(students.router, prefix="/api", tags=["Students"])
 app.include_router(teachers.router, prefix="/api", tags=["Teachers"])
 app.include_router(teacher_schedule_router, prefix="/api")
 app.include_router(announcements_router, prefix="/api", tags=["Announcements"])
+app.include_router(presence_router, prefix="/api", tags=["Presence"])
+
+
 @app.get("/")
 async def root():
     return {

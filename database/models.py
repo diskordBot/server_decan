@@ -5,7 +5,7 @@ import sqlite3
 def create_tables(conn: sqlite3.Connection):
     """Создание таблиц (актуальная схема). Повторные вызовы безопасны."""
     try:
-        # USERS — сразу с role и updated_at
+        # USERS — добавлены last_seen
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -13,7 +13,8 @@ def create_tables(conn: sqlite3.Connection):
                 role TEXT NOT NULL DEFAULT 'user',
                 device_info TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen DATETIME  -- NEW: время последней активности
             )
         """)
 

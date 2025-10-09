@@ -6,38 +6,86 @@ from models.schedule_models import ScheduleData
 
 router = APIRouter()
 
+ALLOWED_DAYS = (
+    'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'
+)
+
+def _normalize_lessons(day: str, lessons):
+    """Отфильтровать пустые занятия и привести ключи."""
+    out = []
+    for lesson in lessons:
+        try:
+            subject = (lesson.get("subject") or "").strip()
+            if not subject:
+                # Пустые предметы не сохраняем — чтобы не «ломали» расписание
+                continue
+            out.append({
+                "lesson_number": int(lesson["lesson_number"]),
+                "subject": subject,
+                "teacher": (lesson.get("teacher") or "").strip(),
+                "classroom": (lesson.get("classroom") or "").strip(),
+                "type": (lesson.get("type") or "").strip(),
+            })
+        except Exception:
+            # Если какой-то элемент кривой — пропускаем
+            continue
+    # Сортируем по номеру пары на всякий случай
+    out.sort(key=lambda x: x["lesson_number"])
+    return out
+
 @router.post("/schedule")
 def save_schedule(schedule_data: ScheduleData):
-    """Сохранение расписания (обе недели разом)"""
+    """Сохранение расписания (обе недели разом)."""
     try:
         with get_db_connection() as conn:
             # убедимся, что группа есть
-            cur = conn.execute("SELECT 1 FROM schedule_groups WHERE group_name = ?", (schedule_data.group,))
+            cur = conn.execute(
+                "SELECT 1 FROM schedule_groups WHERE group_name = ?",
+                (schedule_data.group,)
+            )
             if not cur.fetchone():
-                conn.execute("INSERT INTO schedule_groups (group_name) VALUES (?)", (schedule_data.group,))
+                conn.execute(
+                    "INSERT INTO schedule_groups (group_name) VALUES (?)",
+                    (schedule_data.group,)
+                )
                 logger.info(f"Добавлена новая группа: {schedule_data.group}")
 
             # полностью пересобираем расписание для группы
-            conn.execute("DELETE FROM schedule WHERE group_name = ?", (schedule_data.group,))
+            conn.execute(
+                "DELETE FROM schedule WHERE group_name = ?",
+                (schedule_data.group,)
+            )
 
-            # верхняя неделя
+            # верхняя неделя — сохраняем только разрешённые дни
             for day, lessons in schedule_data.upper_week.items():
-                for lesson in lessons:
+                if day not in ALLOWED_DAYS:
+                    continue
+                for lesson in _normalize_lessons(day, lessons):
                     conn.execute(
                         """INSERT INTO schedule
                            (group_name, week_type, day_name, lesson_number, subject, teacher, classroom, lesson_type)
                            VALUES (?, 'upper', ?, ?, ?, ?, ?, ?)""",
-                        (schedule_data.group, day, lesson["lesson_number"], lesson["subject"], lesson["teacher"], lesson["classroom"], lesson["type"])
+                        (
+                            schedule_data.group, day, lesson["lesson_number"],
+                            lesson["subject"], lesson["teacher"],
+                            lesson["classroom"], lesson["type"]
+                        )
                     )
 
-            # нижняя неделя
+            # нижняя неделя — сохраняем только разрешённые дни
             for day, lessons in schedule_data.lower_week.items():
-                for lesson in lessons:
+                if day not in ALLOWED_DAYS:
+                    continue
+                for lesson in _normalize_lessons(day, lessons):
                     conn.execute(
                         """INSERT INTO schedule
                            (group_name, week_type, day_name, lesson_number, subject, teacher, classroom, lesson_type)
                            VALUES (?, 'lower', ?, ?, ?, ?, ?, ?)""",
-                        (schedule_data.group, day, lesson["lesson_number"], lesson["subject"], lesson["teacher"], lesson["classroom"], lesson["type"])
+                        (
+                            schedule_data.group, day, lesson["lesson_number"],
+                            lesson["subject"], lesson["teacher"],
+                            lesson["classroom"], lesson["type"]
+                        )
                     )
 
             conn.commit()
@@ -50,17 +98,17 @@ def save_schedule(schedule_data: ScheduleData):
 
 @router.get("/schedule/{group_name}/{week_type}")
 def get_schedule(group_name: str, week_type: str):
-    """Расписание для одной недели (экран студента)"""
+    """Расписание для одной недели (экран студента)."""
     try:
         if week_type not in ("upper", "lower"):
             raise HTTPException(status_code=400, detail="Неверный тип недели")
 
         with get_db_connection() as conn:
             cur = conn.execute(
-                """
+                f"""
                 SELECT day_name, lesson_number, subject, teacher, classroom, lesson_type
                 FROM schedule
-                WHERE group_name = ? AND week_type = ?
+                WHERE group_name = ? AND week_type = ? AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
                 ORDER BY
                   CASE day_name
                     WHEN 'Понедельник' THEN 1
@@ -68,11 +116,10 @@ def get_schedule(group_name: str, week_type: str):
                     WHEN 'Среда' THEN 3
                     WHEN 'Четверг' THEN 4
                     WHEN 'Пятница' THEN 5
-                    WHEN 'Суббота' THEN 6
                   END,
                   lesson_number
                 """,
-                (group_name, week_type)
+                (group_name, week_type, *ALLOWED_DAYS)
             )
 
             data = {}
@@ -106,10 +153,10 @@ def get_full_schedule(group_name: str):
         with get_db_connection() as conn:
             def fetch_week(week: str):
                 cur = conn.execute(
-                    """
+                    f"""
                     SELECT day_name, lesson_number, subject, teacher, classroom, lesson_type
                     FROM schedule
-                    WHERE group_name = ? AND week_type = ?
+                    WHERE group_name = ? AND week_type = ? AND day_name IN ({",".join("?"*len(ALLOWED_DAYS))})
                     ORDER BY
                       CASE day_name
                         WHEN 'Понедельник' THEN 1
@@ -120,7 +167,7 @@ def get_full_schedule(group_name: str):
                       END,
                       lesson_number
                     """,
-                    (group_name, week)
+                    (group_name, week, *ALLOWED_DAYS)
                 )
                 out = {}
                 for row in cur.fetchall():
